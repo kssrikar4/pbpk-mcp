@@ -19,7 +19,7 @@ This repository contains a re-implementation of the core Physiologically Based P
 
 ```bash
 git clone https://github.com/kssrikar4/pbpk-mcp.git
-cd pk
+cd pbpk-mcp
 pip install -r requirements.txt
 pip install -e .
 ```
@@ -238,7 +238,7 @@ Add the server entry to your `claude_desktop_config.json`:
 ```json
 {
   "mcpServers": {
-    "pbpk-engine": {
+    "pbpk-mcp": {
       "command": "~/.local/bin/pbpk-mcp"
     }
   }
@@ -249,10 +249,10 @@ Add the server entry to your `claude_desktop_config.json`:
 ```json
 {
   "mcpServers": {
-    "pbpk-engine": {
+    "pbpk-mcp": {
       "command": "python3",
       "args": ["-m", "pbpk.server"],
-      "cwd": "~/pk"
+      "cwd": "~/pbpk-mcp"
     }
   }
 }
@@ -260,7 +260,7 @@ Add the server entry to your `claude_desktop_config.json`:
 
 #### Cursor / Antigravity Configuration
 In Cursor or Antigravity MCP settings, add:
-- **Name**: `pbpk-engine`
+- **Name**: `pbpk-mcp`
 - **Type**: `command` (stdio)
 - **Command**: `pbpk-mcp` (or `~/.local/bin/pbpk-mcp`)
 
@@ -321,7 +321,7 @@ Pass either the `simulation_id` or `simulation_file` returned by `run_pbpk_simul
 
 ## 10. Verified End-to-End Test Prompt & Benchmark Output
 
-Users can copy and paste the following prompt into any AI assistant connected to the `pbpk-engine` MCP server to verify that all tools, simulations, and visualizations execute properly.
+Users can copy and paste the following prompt into any AI assistant connected to the `pbpk-mcp` MCP server to verify that all tools, simulations, and visualizations execute properly.
 
 ### Test Prompt to Copy & Paste
 
