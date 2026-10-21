@@ -206,7 +206,7 @@ plot_pbpk_curves(
 Install the package locally in editable mode:
 
 ```bash
-cd pk
+cd pbpk-mcp
 pip install -e .
 ```
 
