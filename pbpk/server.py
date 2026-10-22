@@ -8,7 +8,12 @@ from pbpk.physiology import scale_physiology
 from pbpk.partition import calculate_rodgers_rowland_kp
 from pbpk.model import WholeBodyPBPKModel
 from pbpk.simulation import PBPKSimulation, run_virtual_population
-from pbpk.visualization import plot_pbpk_curves
+from pbpk.visualization import (
+    plot_pbpk_curves,
+    plot_multicurve_comparison,
+    plot_auc_barchart,
+    plot_renal_function_vs_exposure
+)
 
 mcp = FastMCP("PBPK-Engine")
 
@@ -35,6 +40,31 @@ def _build_remediation(exc):
     if "dose_mg" in msg:
         return "Modify 'dose_mg' to be a strictly positive float (> 0.0), then rerun."
     return "Check parameter bounds and data types, adjust the invalid inputs, and rerun."
+
+def _resolve_simulation_data(ref_str):
+    s = ref_str.strip()
+    if s in SIMULATION_STORE:
+        return SIMULATION_STORE[s]
+    if os.path.isfile(s):
+        with open(s, "r") as f:
+            return json.load(f)
+    try:
+        parsed = json.loads(s)
+        if isinstance(parsed, dict):
+            sid = parsed.get("simulation_id")
+            sfile = parsed.get("simulation_file")
+            if sid and sid in SIMULATION_STORE:
+                return SIMULATION_STORE[sid]
+            if sfile and os.path.isfile(sfile):
+                with open(sfile, "r") as f:
+                    return json.load(f)
+            if "data" in parsed and isinstance(parsed["data"], dict) and "venous_plasma_mg_l" in parsed["data"]:
+                return parsed["data"]
+            if "venous_plasma_mg_l" in parsed:
+                return parsed
+    except Exception:
+        pass
+    return None
 
 @mcp.tool()
 def get_physiological_params(species: str, weight_kg: float) -> str:
@@ -184,36 +214,160 @@ def run_pbpk_simulation(dose_mg: float, dose_route: str, infusion_duration_h: fl
 def generate_plots(simulation_json: str, output_path: str, target_organ: str = "Liver") -> str:
     try:
         ref_str = simulation_json.strip()
-        sim_data = None
-
-        if ref_str in SIMULATION_STORE:
-            sim_data = SIMULATION_STORE[ref_str]
-        elif os.path.isfile(ref_str):
-            with open(ref_str, "r") as f:
-                sim_data = json.load(f)
-        else:
-            try:
-                parsed = json.loads(ref_str)
-                if isinstance(parsed, dict):
-                    sid = parsed.get("simulation_id")
-                    sfile = parsed.get("simulation_file")
-                    if sid and sid in SIMULATION_STORE:
-                        sim_data = SIMULATION_STORE[sid]
-                    elif sfile and os.path.isfile(sfile):
-                        with open(sfile, "r") as f:
-                            sim_data = json.load(f)
-                    elif "data" in parsed and isinstance(parsed["data"], dict) and "venous_plasma_mg_l" in parsed["data"]:
-                        sim_data = parsed["data"]
-                    elif "venous_plasma_mg_l" in parsed:
-                        sim_data = parsed
-            except Exception:
-                pass
+        sim_data = _resolve_simulation_data(ref_str)
 
         if sim_data is None:
+            if "," in ref_str:
+                parts = [p.strip() for p in ref_str.split(",") if p.strip()]
+                scenarios = []
+                for idx, p in enumerate(parts):
+                    d = _resolve_simulation_data(p)
+                    if d is not None:
+                        scenarios.append({"label": "Scenario " + str(idx + 1), "data": d})
+                if scenarios:
+                    saved_path = plot_multicurve_comparison(scenarios, output_path)
+                    return json.dumps({"status": "success", "output_path": saved_path}, indent=2)
+
             raise ValueError("Could not resolve simulation data from provided simulation_json. Please pass a valid simulation_id, simulation_file, or JSON string.")
 
         saved_path = plot_pbpk_curves(sim_data, output_path, target_organ=target_organ)
         return json.dumps({"status": "success", "output_path": saved_path}, indent=2)
+    except Exception as exc:
+        return json.dumps({
+            "status": "error",
+            "error_type": exc.__class__.__name__,
+            "error": str(exc),
+            "remediation": _build_remediation(exc)
+        }, indent=2)
+
+@mcp.tool()
+def generate_comparison_plots(simulation_ids: str, labels: str, output_path: str, plot_type: str = "multicurve", renal_metrics: str = "") -> str:
+    try:
+        id_list = [i.strip() for i in simulation_ids.split(",") if i.strip()]
+        label_list = [l.strip() for l in labels.split(",") if l.strip()]
+
+        if len(id_list) != len(label_list):
+            raise ValueError("The count of simulation_ids must match the count of labels.")
+
+        resolved_sims = []
+        aucs = []
+
+        for sid in id_list:
+            d = _resolve_simulation_data(sid)
+            if d is None:
+                raise ValueError("Could not find simulation for id: " + sid)
+            resolved_sims.append(d)
+            if "summary" in d and "auc_plasma_mg_h_l" in d["summary"]:
+                aucs.append(d["summary"]["auc_plasma_mg_h_l"])
+            elif "venous_plasma_mg_l" in d and "time_h" in d:
+                import numpy as np
+                aucs.append(float(np.trapezoid(d["venous_plasma_mg_l"], d["time_h"])))
+            else:
+                aucs.append(0.0)
+
+        ptype = plot_type.lower()
+
+        if ptype == "multicurve":
+            scenarios = [{"label": label_list[i], "data": resolved_sims[i]} for i in range(len(label_list))]
+            saved = plot_multicurve_comparison(scenarios, output_path)
+        elif ptype == "auc_bar":
+            saved = plot_auc_barchart(label_list, aucs, output_path)
+        elif ptype in ("renal_vs_auc", "correlation"):
+            if not renal_metrics.strip():
+                raise ValueError("renal_metrics (comma-separated numbers) must be provided for renal_vs_auc plot.")
+            r_vals = [float(v.strip()) for v in renal_metrics.split(",") if v.strip()]
+            if len(r_vals) != len(aucs):
+                raise ValueError("The count of renal_metrics must match the count of simulations.")
+            saved = plot_renal_function_vs_exposure(r_vals, aucs, output_path)
+        else:
+            raise ValueError("Unsupported plot_type: " + str(plot_type) + ". Choose from: 'multicurve', 'auc_bar', 'renal_vs_auc'.")
+
+        return json.dumps({"status": "success", "output_path": saved}, indent=2)
+    except Exception as exc:
+        return json.dumps({
+            "status": "error",
+            "error_type": exc.__class__.__name__,
+            "error": str(exc),
+            "remediation": _build_remediation(exc)
+        }, indent=2)
+
+@mcp.tool()
+def compare_renal_impairment(dose_mg: float, log_p: float, pka1: float, compound_type: str, fup: float, b2p: float, healthy_cl_ren_l_h: float, clearance_hep_l_h: float = 0.0, simulation_time_h: float = 48.0, ka_h: float = 0.5, output_dir: str = ".") -> str:
+    try:
+        os.makedirs(output_dir, exist_ok=True)
+
+        scenarios = [
+            ("Healthy (eGFR >= 90)", 1.0, 100.0),
+            ("Mild Impairment (eGFR 60-89)", 0.75, 75.0),
+            ("Moderate Impairment (eGFR 30-59)", 0.45, 45.0),
+            ("Severe Impairment (eGFR 15-29)", 0.20, 20.0)
+        ]
+
+        phys = scale_physiology("Human", 73.0)
+        kp_dict = calculate_rodgers_rowland_kp(
+            compound_type=compound_type,
+            log_p=log_p,
+            pka1=pka1,
+            fup=fup,
+            b2p=b2p,
+            species_data=phys
+        )
+        model = WholeBodyPBPKModel(phys, kp_dict)
+
+        results_list = []
+        sim_objects = []
+        labels = []
+        aucs = []
+        egfrs = []
+
+        for name, scale_factor, egfr in scenarios:
+            cl_ren = healthy_cl_ren_l_h * scale_factor
+            sim = PBPKSimulation(
+                model=model,
+                dose_mg=dose_mg,
+                dose_route="oral",
+                simulation_time_h=simulation_time_h,
+                clearance_hep_l_h=clearance_hep_l_h,
+                clearance_ren_l_h=cl_ren,
+                ka_h=ka_h
+            )
+            res = sim.run()
+
+            sid = "sim_renal_" + uuid.uuid4().hex[:6]
+            SIMULATION_STORE[sid] = res
+            sim_objects.append({"label": name, "data": res})
+            labels.append(name)
+            aucs.append(res["summary"]["auc_plasma_mg_h_l"])
+            egfrs.append(egfr)
+
+            results_list.append({
+                "group": name,
+                "egfr_ml_min": egfr,
+                "renal_clearance_l_h": cl_ren,
+                "c_max_mg_l": res["summary"]["c_max_mg_l"],
+                "t_max_h": res["summary"]["t_max_h"],
+                "auc_plasma_mg_h_l": res["summary"]["auc_plasma_mg_h_l"],
+                "half_life_h": res["summary"]["half_life_h"]
+            })
+
+        p1 = os.path.join(output_dir, "figure1_plasma_overlay.png")
+        p2 = os.path.join(output_dir, "figure2_auc_comparison.png")
+        p3 = os.path.join(output_dir, "figure3_renal_vs_exposure.png")
+
+        plot_multicurve_comparison(sim_objects, p1)
+        plot_auc_barchart(labels, aucs, p2)
+        plot_renal_function_vs_exposure(egfrs, aucs, p3, xlabel="eGFR (mL/min)", ylabel="Plasma AUC (mg·h/L)")
+
+        return json.dumps({
+            "status": "success",
+            "study": "Renal Impairment Comparison",
+            "table": results_list,
+            "plots": {
+                "figure1_multicurve": p1,
+                "figure2_auc_barchart": p2,
+                "figure3_renal_vs_exposure": p3
+            }
+        }, indent=2)
     except Exception as exc:
         return json.dumps({
             "status": "error",

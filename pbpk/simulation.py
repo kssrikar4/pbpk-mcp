@@ -118,6 +118,13 @@ class PBPKSimulation:
         for org, c_arr in organ_concentrations.items():
             organ_aucs[org] = float(np.trapezoid(c_arr, times))
 
+        elim_mask = (times >= t_max) & (c_venous_plasma > 0.05 * c_max)
+        if np.sum(elim_mask) >= 3:
+            slope, _ = np.polyfit(times[elim_mask], np.log(c_venous_plasma[elim_mask]), 1)
+            t_half = float(np.log(2.0) / -slope) if slope < 0.0 else 0.0
+        else:
+            t_half = 0.0
+
         return {
             "time_h": times.tolist(),
             "venous_plasma_mg_l": c_venous_plasma.tolist(),
@@ -131,6 +138,7 @@ class PBPKSimulation:
                 "c_max_mg_l": c_max,
                 "t_max_h": t_max,
                 "auc_plasma_mg_h_l": auc_plasma,
+                "half_life_h": t_half,
                 "organ_aucs_mg_h_l": organ_aucs
             }
         }

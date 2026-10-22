@@ -6,7 +6,9 @@ from pbpk.server import (
     get_physiological_params,
     calculate_partition_coefficients,
     run_pbpk_simulation,
-    generate_plots
+    generate_plots,
+    generate_comparison_plots,
+    compare_renal_impairment
 )
 
 class TestServerTools(unittest.TestCase):
@@ -145,6 +147,47 @@ class TestServerTools(unittest.TestCase):
         self.assertIn("error", resp)
         self.assertIn("remediation", resp)
         self.assertIn("infusion_duration_h", resp["remediation"])
+
+    def test_compare_renal_impairment_tool(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            res_str = compare_renal_impairment(
+                dose_mg=500.0,
+                log_p=-1.43,
+                pka1=12.4,
+                compound_type="monoprotic_base",
+                fup=1.0,
+                b2p=1.0,
+                healthy_cl_ren_l_h=30.0,
+                simulation_time_h=24.0,
+                output_dir=tmpdir
+            )
+            res = json.loads(res_str)
+            self.assertEqual(res["status"], "success")
+            self.assertEqual(len(res["table"]), 4)
+            self.assertTrue(os.path.exists(res["plots"]["figure1_multicurve"]))
+            self.assertTrue(os.path.exists(res["plots"]["figure2_auc_barchart"]))
+            self.assertTrue(os.path.exists(res["plots"]["figure3_renal_vs_exposure"]))
+
+    def test_generate_comparison_plots_tool(self):
+        s1 = json.loads(run_pbpk_simulation(50.0, "iv_bolus", 0.0, 6.0, 10.0, 2.0, 2.6, 9.45, "monoprotic_base", 0.13, 1.15))["simulation_id"]
+        s2 = json.loads(run_pbpk_simulation(50.0, "iv_bolus", 0.0, 6.0, 5.0, 1.0, 2.6, 9.45, "monoprotic_base", 0.13, 1.15))["simulation_id"]
+        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tf:
+            p1 = tf.name
+        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tf:
+            p2 = tf.name
+        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tf:
+            p3 = tf.name
+        try:
+            r1 = json.loads(generate_comparison_plots(f"{s1},{s2}", "Normal,Impaired", p1, "multicurve"))
+            self.assertEqual(r1["status"], "success")
+            r2 = json.loads(generate_comparison_plots(f"{s1},{s2}", "Normal,Impaired", p2, "auc_bar"))
+            self.assertEqual(r2["status"], "success")
+            r3 = json.loads(generate_comparison_plots(f"{s1},{s2}", "Normal,Impaired", p3, "renal_vs_auc", "100,50"))
+            self.assertEqual(r3["status"], "success")
+        finally:
+            for p in [p1, p2, p3]:
+                if os.path.exists(p):
+                    os.remove(p)
 
 if __name__ == "__main__":
     unittest.main()
