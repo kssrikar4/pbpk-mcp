@@ -14,6 +14,7 @@ This repository contains a re-implementation of the core Physiologically Based P
 - `matplotlib >= 3.8.0`
 - `fastmcp >= 0.1.0`
 - `mcp >= 1.0.0`
+- `rdkit >= 2023.9.0`
 
 ## Installation
 
@@ -39,12 +40,13 @@ python3 -m unittest tests/test_mass_balance.py
 python3 -m unittest tests/test_partition.py
 python3 -m unittest tests/test_simulation.py
 python3 -m unittest tests/test_server.py
+python3 -m unittest tests/test_properties.py
 python3 -m unittest tests/test_performance.py
 ```
 
 ## Running the FastMCP Server
 
-The MCP server exposes flat primitive tools (`get_physiological_params`, `calculate_partition_coefficients`, `run_pbpk_simulation`, and `generate_plots`):
+The MCP server exposes flat primitive tools (`get_physiological_params`, `calculate_partition_coefficients`, `estimate_compound_properties`, `convert_clearance_units`, `run_pbpk_simulation`, `run_smiles_pbpk_simulation`, `compare_renal_impairment`, `generate_plots`, and `generate_comparison_plots`):
 
 ### Standard I/O (STDIO) Mode
 ```bash
@@ -97,7 +99,22 @@ for organ, val in kp_dict.items():
     print(f"{organ:15s}: {val:.3f}")
 ```
 
-### 3. Running Single-Subject Simulations
+### 3. Automated In Silico Property Estimation from SMILES
+Automatically derive physicochemical parameters (`log_p`, `pka1`, `compound_type`, `fup`, `b2p`, `ka_h`, `clearance_hep_l_h`, `clearance_ren_l_h`) for novel drugs without experimental wet-lab measurements:
+
+```python
+from pbpk.properties import estimate_parameters_from_smiles
+
+# Metformin: SMILES CN(C)C(=N)NC(=N)N
+metformin_props = estimate_parameters_from_smiles("CN(C)C(=N)NC(=N)N")
+print("Compound Type:", metformin_props["compound_type"])
+print("pKa1:", metformin_props["pka1"])
+print("LogP:", metformin_props["log_p"])
+print("Hepatic Clearance (L/h):", metformin_props["clearance_hep_l_h"])
+print("Renal Clearance (L/h):", metformin_props["clearance_ren_l_h"])
+```
+
+### 4. Running Single-Subject Simulations
 
 #### A. IV Bolus Dose
 ```python
@@ -290,7 +307,15 @@ Small LLM agents invoke these deterministic tools using standard primitives:
 }
 ```
 
-#### Tool 3: `run_pbpk_simulation`
+#### Tool 3: `estimate_compound_properties`
+Predicts $pK_a$, $f_{up}$, $\log P$, $k_a$, hepatic and renal clearance from SMILES:
+```json
+{
+  "smiles": "CN(C)C(=N)NC(=N)N"
+}
+```
+
+#### Tool 4: `run_pbpk_simulation`
 ```json
 {
   "dose_mg": 100.0,
@@ -309,13 +334,56 @@ Small LLM agents invoke these deterministic tools using standard primitives:
 }
 ```
 
-#### Tool 4: `generate_plots`
-Pass either the `simulation_id` or `simulation_file` returned by `run_pbpk_simulation`:
+#### Tool 5: `run_smiles_pbpk_simulation`
+Runs full PBPK ODE simulation directly from SMILES without manual parameters:
+```json
+{
+  "smiles": "CN(C)C(=N)NC(=N)N",
+  "dose_mg": 500.0,
+  "dose_route": "oral",
+  "simulation_time_h": 48.0
+}
+```
+
+#### Tool 6: `compare_renal_impairment`
+Simulates Healthy, Mild, Moderate, and Severe renal impairment, outputting multi-curve plots and metrics:
+```json
+{
+  "smiles": "CN(C)C(=N)NC(=N)N",
+  "dose_mg": 500.0,
+  "simulation_time_h": 48.0,
+  "output_dir": "."
+}
+```
+
+#### Tool 7: `generate_plots`
+Pass either the `simulation_id` or `simulation_file` returned by simulation tools:
 ```json
 {
   "simulation_json": "sim_8e6bafab",
   "output_path": "simulation_plot.png",
   "target_organ": "Liver"
+}
+```
+
+#### Tool 8: `generate_comparison_plots`
+Compares multiple simulations across groups:
+```json
+{
+  "simulation_ids": "sim_01,sim_02,sim_03,sim_04",
+  "labels": "Healthy,Mild,Moderate,Severe",
+  "output_path": "comparison_plot.png",
+  "plot_type": "multicurve"
+}
+```
+
+#### Tool 9: `convert_clearance_units`
+Converts clearance metrics between `L/h` and `mL/min`:
+```json
+{
+  "value": 28.0,
+  "from_unit": "L/h",
+  "to_unit": "mL/min"
 }
 ```
 
@@ -326,61 +394,123 @@ Users can copy and paste the following prompt into any AI assistant connected to
 ### Test Prompt to Copy & Paste
 
 ```text
-Run a physiologically based pharmacokinetic (PBPK) simulation for the drug Propranolol in a standard 70 kg human:
+Develop a metformin PBPK model using its SMILES string "CN(C)C(=N)NC(=N)N".
+Simulate plasma concentration–time profiles after oral administration.
+Compare healthy individuals with mild, moderate and severe renal impairment.
+Determine changes in peak concentration, total exposure and elimination.
+Produce a final multi-curve graph demonstrating how renal function affects drug exposure.
 
-1. Retrieve the physiological organ volumes and blood flow rates for a 70 kg human using get_physiological_params.
-2. Calculate the Rodgers & Rowland tissue partition coefficients (Kp) using calculate_partition_coefficients for a monoprotic base with:
-   - log_p: 2.6
-   - pka1: 9.45
-   - fup: 0.13
-   - b2p: 1.15
-3. Run a 24-hour PBPK simulation for a 100 mg IV bolus dose using run_pbpk_simulation with:
-   - clearance_hep_l_h: 18.0
-   - clearance_ren_l_h: 4.5
-   - weight_kg: 70.0
-4. Generate a clean plot of the plasma vs liver concentration curves saved to "propranolol_simulation.png" using generate_plots.
-5. Report the Cmax, Tmax, plasma AUC, liver AUC, and verify that the mass balance error is less than 1e-5 mg.
+2. Simulation design
+Parameter: Proposed setup
+Drug: Metformin
+SMILES: CN(C)C(=N)NC(=N)N
+Administration: Oral
+Dosage: 500 mg single dose
+Simulation duration: 48 hours
+Reference population: Healthy adults
+Comparison populations: Mild, moderate and severe renal impairment
+Primary output: Plasma concentration versus time
+Secondary outputs: C_max, T_max, AUC and half-life
+
+Use a consistent virtual adult population and change renal physiology appropriately for each scenario. The severity categories and model parameters should be defined using published clinical and physiological data or estimated from the compound's structure rather than arbitrary settings.
+
+Your final figure should contain four simulated curves:
+- Healthy renal function
+- Mild renal impairment
+- Moderate renal impairment
+- Severe renal impairment
+
+4. Additional plots for your report
+Figure 2 — AUC comparison:
+A bar chart showing total drug exposure across the four renal-function groups.
+
+Figure 3 — Renal function versus drug exposure:
+Plot renal function against AUC or apparent elimination half-life to illustrate the relationship.
+
+5. Workflow
+Create a metformin compound using appropriate physicochemical and pharmacokinetic information derived from its chemical structure (SMILES: "CN(C)C(=N)NC(=N)N").
+Build or select a suitable adult reference individual.
+Configure oral administration and the single-dose protocol.
+Parameterize renal impairment using evidence-based physiological changes, particularly renal function and renal drug clearance.
+Run each scenario using the same dosing and observation schedule.
+Export plasma concentration–time results and overlay all four curves.
+Calculate and compare pharmacokinetic parameters, then assess the model against available clinical data.
 ```
 
-### Verified Benchmark Output
+### Verified Benchmark Output (Using qwen3-4b at 32k context)
 
 ```text
-PBPK Simulation Results for Propranolol
+## **Metformin PBPK Model Development Summary**
 
-Step 1: Physiological Parameters (70 kg Human)
-Successfully retrieved physiological parameters including:
-- Blood flow rates: Liver = 95.39 L/h, Kidney = 76.23 L/h, Cardiac Output = 351.33 L/h
-- Organ volumes: Liver = 2.36 L, Kidney = 0.44 L
-- Plasma pH: 7.4
+### **1. Compound Properties (from SMILES "CN(C)C(=N)NC(=O)N")**
+- Molecular Weight: ~130 g/mol
+- logP: -0.849 (highly water-soluble, polar compound)
+- pKa1: 12.4, pKa2: 0.0 (monoprotic base at physiological pH)
+- Compound Type: monoprotic_base
+- Fraction unbound in plasma (fup): 0.878
+- b2p ratio: 1.0
 
-Step 2: Partition Coefficients (Rodgers & Rowland Method)
-Calculated tissue partition coefficients for Propranolol (monoprotic base):
-- Key organs: Liver Kp = 16.05, Kidney Kp = 17.67, Fat Kp = 1.45, Brain Kp = 1.62
+### **2. Physiological Reference Population**
+- Species: Human, Weight: 73 kg
+- Kidney blood flow: ~79.5 L/h
+- Plasma pH: 7.4 (physiologic)
 
-Step 3: PBPK Simulation Results (IV Bolus 100 mg)
-| Parameter  | Value   | Units    |
-|------------|---------|----------|
-| Cmax       | 108.19  | mg/L     |
-| Tmax       | 0.0     | hours    |
-| Plasma AUC | 5.82    | mg·h/L   |
-| Liver AUC  | 46.80   | mg·h/L   |
+### **3. Simulated Pharmacokinetic Parameters by Renal Function Group**
 
-Step 4: Plot Generation
-Clean plasma vs liver concentration curves saved to propranolol_simulation.png
+| Renal Function | eGFR (mL/min) | CrCl (L/h) | c_max (mg/L) | T_max (h) | AUC (mg·h/L) | t₁/₂ (h) | Relative AUC Fold |
+|----------------|----------------|------------|--------------|-----------|--------------|----------|-------------------|
+| Healthy | 100 | 27.4 | 2.02 | 1.73 | 18.16 | 4.31 | 1.0 (baseline) |
+| Mild Impairment | 75 | 20.5 | 2.22 | 2.02 | 24.14 | 5.36 | 1.33 |
+| Moderate Impairment | 45 | 12.3 | 2.55 | 2.69 | 39.47 | 8.21 | 2.17 |
+| Severe Impairment | 20 | 5.5 | 2.99 | 3.94 | 76.07 | 17.32 | 4.19 |
 
-Step 5: Mass Balance Verification
-- Mass balance error: 1.28 × 10⁻¹⁰ mg
-- Requirement: < 1 × 10⁻⁵ mg
-- Status: PASSED (error is approximately 5 orders of magnitude below threshold)
+### **4. Key Findings**
 
-Key Observations:
-1. Immediate peak concentration (Tmax = 0 h): As expected for IV bolus administration, the drug reaches maximum concentration instantly at time zero.
-2. High plasma concentrations: Cmax of ~108 mg/L reflects Propranolol's rapid distribution and high systemic exposure.
-3. Liver accumulation: Liver AUC (46.80 mg·h/L) is significantly higher than plasma AUC (5.82 mg·h/L), consistent with the liver partition coefficient (Kp = 16.05).
-4. Extraction ratio: The hepatic clearance (18 L/h) combined with protein binding (~13% unbound fraction) results in significant first-pass metabolism characteristics.
+**Peak Concentration (c_max):**
+- Minimal increase in mild impairment (+10%)
+- Moderate: +27% increase
+- Severe: +48% increase
+
+**Total Exposure (AUC):**
+- Mild impairment: 33% increase (clinically insignificant)
+- Moderate impairment: 118% increase (dose consideration needed)
+- Severe impairment: 319% increase (significant accumulation risk)
+
+**Elimination Half-life:**
+- Healthy to severe impairment: 4.3 h → 17.3 h (4× prolongation)
+
+### **5. Generated Plots**
+
+**Figure 1 — Multi-curve Plasma Concentration-Time Profiles:**
+- Shows all four renal function groups overlaid
+- Demonstrates progressive increase in exposure with worsening renal impairment
+- Plot location: `/tmp/metformin_pk_comparison_alt.svg`
+
+**Figure 2 — AUC Comparison Bar Chart:**
+- Quantitative comparison of total drug exposure across groups
+- Clear visualization showing exponential increase from severe to healthy impairment
+- Plot location: `/tmp/renal_impairment_analysis/figure2_auc_comparison.png`
+
+**Figure 3 — Renal Function vs Drug Exposure:**
+- Correlates eGFR/CrCl with AUC and half-life changes
+- Illustrates non-linear relationship between renal function and drug exposure
+- Plot location: `/tmp/renal_impairment_analysis/figure3_renal_vs_exposure.png`
+
+**Individual Concentration-Time Plots:**
+- All four scenarios visualized separately for detailed analysis
+- Locations:
+  - Healthy: `/tmp/metformin_healthy.svg`
+  - Mild: `/tmp/metformin_mild_impairment.svg`
+  - Moderate: `/tmp/metformin_moderate_impairment.svg`
+  - Severe: `/tmp/metformin_severe_impairment.svg`
+
+### **6. Clinical Relevance**
+
+The model predictions align with FDA recommendations for metformin:
+- eGFR ≥60 mL/min (mild impairment): No dose adjustment needed (model shows <35% AUC increase)
+- eGFR 30-59 mL/min (moderate impairment): Dose consideration (model shows ~2× AUC increase)
+- eGFR <30 mL/min (severe impairment): Contraindicated (model shows >4× AUC increase with significant accumulation risk)
 ```
-
-<img width="1950" height="1200" alt="propranolol_simulation" src="https://github.com/user-attachments/assets/8129d921-7b18-433a-a6ff-2cf18684e6ae" />
 
 ## Mathematical Formulations
 

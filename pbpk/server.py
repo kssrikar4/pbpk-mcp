@@ -6,6 +6,7 @@ import tempfile
 from fastmcp import FastMCP
 from pbpk.physiology import scale_physiology
 from pbpk.partition import calculate_rodgers_rowland_kp
+from pbpk.properties import estimate_parameters_from_smiles
 from pbpk.model import WholeBodyPBPKModel
 from pbpk.simulation import PBPKSimulation, run_virtual_population
 from pbpk.visualization import (
@@ -23,6 +24,8 @@ os.makedirs(SIM_CACHE_DIR, exist_ok=True)
 
 def _build_remediation(exc):
     msg = str(exc).lower()
+    if "smiles" in msg:
+        return "Provide a valid, parsable chemical SMILES string (e.g. 'CN(C)C(=N)NC(=N)N' for metformin), then rerun."
     if "fup" in msg or "fraction unbound" in msg:
         return "Modify 'fup' to be a positive float between 0.0 and 1.0 (exclusive of 0, inclusive of 1, e.g., 0.1 for 10% unbound), then rerun."
     if "b2p" in msg or "blood to plasma" in msg:
@@ -100,7 +103,48 @@ def calculate_partition_coefficients(compound_type: str, log_p: float, pka1: flo
         }, indent=2)
 
 @mcp.tool()
-def run_pbpk_simulation(dose_mg: float, dose_route: str, infusion_duration_h: float, simulation_time_h: float, clearance_hep_l_h: float, clearance_ren_l_h: float, log_p: float, pka1: float, compound_type: str, fup: float, b2p: float, weight_kg: float = 73.0, num_subjects: int = 1) -> str:
+def estimate_compound_properties(smiles: str) -> str:
+    try:
+        props = estimate_parameters_from_smiles(smiles)
+        return json.dumps({"status": "success", "data": props}, indent=2)
+    except Exception as exc:
+        return json.dumps({
+            "status": "error",
+            "error_type": exc.__class__.__name__,
+            "error": str(exc),
+            "remediation": _build_remediation(exc)
+        }, indent=2)
+
+@mcp.tool()
+def run_smiles_pbpk_simulation(smiles: str, dose_mg: float = 500.0, dose_route: str = "oral", infusion_duration_h: float = 0.0, simulation_time_h: float = 48.0, weight_kg: float = 73.0, num_subjects: int = 1) -> str:
+    try:
+        props = estimate_parameters_from_smiles(smiles)
+        return run_pbpk_simulation(
+            dose_mg=dose_mg,
+            dose_route=dose_route,
+            infusion_duration_h=infusion_duration_h,
+            simulation_time_h=simulation_time_h,
+            clearance_hep_l_h=props["clearance_hep_l_h"],
+            clearance_ren_l_h=props["clearance_ren_l_h"],
+            log_p=props["log_p"],
+            pka1=props["pka1"],
+            compound_type=props["compound_type"],
+            fup=props["fup"],
+            b2p=props["b2p"],
+            weight_kg=weight_kg,
+            num_subjects=num_subjects,
+            ka_h=props["ka_h"]
+        )
+    except Exception as exc:
+        return json.dumps({
+            "status": "error",
+            "error_type": exc.__class__.__name__,
+            "error": str(exc),
+            "remediation": _build_remediation(exc)
+        }, indent=2)
+
+@mcp.tool()
+def run_pbpk_simulation(dose_mg: float, dose_route: str, infusion_duration_h: float, simulation_time_h: float, clearance_hep_l_h: float, clearance_ren_l_h: float, log_p: float, pka1: float, compound_type: str, fup: float, b2p: float, weight_kg: float = 73.0, num_subjects: int = 1, ka_h: float = 1.0) -> str:
     try:
         if num_subjects < 1:
             raise ValueError("num_subjects must be an integer >= 1.")
@@ -119,7 +163,8 @@ def run_pbpk_simulation(dose_mg: float, dose_route: str, infusion_duration_h: fl
             "infusion_duration_h": infusion_duration_h,
             "simulation_time_h": simulation_time_h,
             "clearance_hep_l_h": clearance_hep_l_h,
-            "clearance_ren_l_h": clearance_ren_l_h
+            "clearance_ren_l_h": clearance_ren_l_h,
+            "ka_h": ka_h
         }
 
         sim_id = "sim_" + uuid.uuid4().hex[:8]
@@ -143,7 +188,8 @@ def run_pbpk_simulation(dose_mg: float, dose_route: str, infusion_duration_h: fl
                 infusion_duration_h=infusion_duration_h,
                 simulation_time_h=simulation_time_h,
                 clearance_hep_l_h=clearance_hep_l_h,
-                clearance_ren_l_h=clearance_ren_l_h
+                clearance_ren_l_h=clearance_ren_l_h,
+                ka_h=ka_h
             )
             res = sim.run()
 
@@ -292,8 +338,56 @@ def generate_comparison_plots(simulation_ids: str, labels: str, output_path: str
         }, indent=2)
 
 @mcp.tool()
-def compare_renal_impairment(dose_mg: float, log_p: float, pka1: float, compound_type: str, fup: float, b2p: float, healthy_cl_ren_l_h: float, clearance_hep_l_h: float = 0.0, simulation_time_h: float = 48.0, ka_h: float = 0.5, output_dir: str = ".") -> str:
+def convert_clearance_units(value: float, from_unit: str, to_unit: str) -> str:
     try:
+        f = from_unit.strip().lower()
+        t = to_unit.strip().lower()
+        if f in ("l/h", "l_h", "liters/hour") and t in ("ml/min", "ml_min", "milliliters/minute"):
+            converted = float(value * 1000.0 / 60.0)
+        elif f in ("ml/min", "ml_min", "milliliters/minute") and t in ("l/h", "l_h", "liters/hour"):
+            converted = float(value * 60.0 / 1000.0)
+        else:
+            raise ValueError("Supported unit conversions: 'L/h' <-> 'mL/min'")
+        return json.dumps({
+            "status": "success",
+            "original_value": value,
+            "from_unit": from_unit,
+            "converted_value": round(converted, 4),
+            "to_unit": to_unit
+        }, indent=2)
+    except Exception as exc:
+        return json.dumps({
+            "status": "error",
+            "error_type": exc.__class__.__name__,
+            "error": str(exc),
+            "remediation": "Provide valid units ('L/h' or 'mL/min'), e.g., from_unit='mL/min', to_unit='L/h'."
+        }, indent=2)
+
+@mcp.tool()
+def compare_renal_impairment(dose_mg: float = 500.0, smiles: str = "", log_p: float = 0.0, pka1: float = 0.0, compound_type: str = "neutral", fup: float = 1.0, b2p: float = 1.0, healthy_cl_ren_l_h: float = 0.0, clearance_hep_l_h: float = 0.0, simulation_time_h: float = 48.0, ka_h: float = 0.5, output_dir: str = ".") -> str:
+    try:
+        if smiles and smiles.strip():
+            props = estimate_parameters_from_smiles(smiles)
+            if compound_type == "neutral" and props["compound_type"] != "neutral":
+                compound_type = props["compound_type"]
+            if log_p == 0.0:
+                log_p = props["log_p"]
+            if pka1 == 0.0:
+                pka1 = props["pka1"]
+            if fup == 1.0:
+                fup = props["fup"]
+            if b2p == 1.0:
+                b2p = props["b2p"]
+            if healthy_cl_ren_l_h <= 0.0:
+                healthy_cl_ren_l_h = props["clearance_ren_l_h"]
+            if clearance_hep_l_h == 0.0:
+                clearance_hep_l_h = props["clearance_hep_l_h"]
+            if ka_h == 0.5:
+                ka_h = props["ka_h"]
+
+        if healthy_cl_ren_l_h <= 0.0:
+            raise ValueError("healthy_cl_ren_l_h must be a positive float (> 0.0), or provide a valid 'smiles' string to estimate it.")
+
         os.makedirs(output_dir, exist_ok=True)
 
         scenarios = [
@@ -340,14 +434,18 @@ def compare_renal_impairment(dose_mg: float, log_p: float, pka1: float, compound
             aucs.append(res["summary"]["auc_plasma_mg_h_l"])
             egfrs.append(egfr)
 
+            baseline_auc = aucs[0] if aucs else res["summary"]["auc_plasma_mg_h_l"]
             results_list.append({
                 "group": name,
                 "egfr_ml_min": egfr,
                 "renal_clearance_l_h": cl_ren,
+                "renal_clearance_ml_min": round(cl_ren * 1000.0 / 60.0, 2),
+                "clearance_reduction_percent": round((1.0 - scale_factor) * 100.0, 1),
                 "c_max_mg_l": res["summary"]["c_max_mg_l"],
                 "t_max_h": res["summary"]["t_max_h"],
                 "auc_plasma_mg_h_l": res["summary"]["auc_plasma_mg_h_l"],
-                "half_life_h": res["summary"]["half_life_h"]
+                "half_life_h": res["summary"]["half_life_h"],
+                "relative_auc_fold": round(res["summary"]["auc_plasma_mg_h_l"] / baseline_auc, 2)
             })
 
         p1 = os.path.join(output_dir, "figure1_plasma_overlay.png")

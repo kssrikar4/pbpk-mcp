@@ -98,7 +98,7 @@ def plot_auc_barchart(labels, aucs, output_path):
 
     palette = ["#0F172A", "#2563EB", "#D97706", "#DC2626", "#059669"]
 
-    fig, ax = plt.subplots(figsize=(6.5, 4.0), dpi=300)
+    fig, ax = plt.subplots(figsize=(7.5, 4.5), dpi=300)
 
     x_indices = np.arange(len(labels))
     bars = ax.bar(x_indices, aucs, color=[palette[i % len(palette)] for i in range(len(labels))], width=0.55, edgecolor="none")
@@ -107,8 +107,9 @@ def plot_auc_barchart(labels, aucs, output_path):
         h = bar.get_height()
         ax.text(bar.get_x() + bar.get_width() / 2.0, h + max(aucs) * 0.02, "{:.1f}".format(val), ha="center", va="bottom", fontsize=8.5, color="#111827", fontweight="medium")
 
+    formatted_labels = [str(l).replace(" (", "\n(") for l in labels]
     ax.set_xticks(x_indices)
-    ax.set_xticklabels(labels, fontsize=9, color="#111827")
+    ax.set_xticklabels(formatted_labels, fontsize=8.5, color="#111827", rotation=15, ha="right")
     ax.set_ylabel("AUC (mg·h/L)", fontsize=10, fontweight="medium", color="#111827")
     ax.set_ylim(0, max(aucs) * 1.15)
 

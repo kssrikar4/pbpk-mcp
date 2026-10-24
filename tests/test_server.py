@@ -8,7 +8,10 @@ from pbpk.server import (
     run_pbpk_simulation,
     generate_plots,
     generate_comparison_plots,
-    compare_renal_impairment
+    compare_renal_impairment,
+    estimate_compound_properties,
+    run_smiles_pbpk_simulation,
+    convert_clearance_units
 )
 
 class TestServerTools(unittest.TestCase):
@@ -188,6 +191,52 @@ class TestServerTools(unittest.TestCase):
             for p in [p1, p2, p3]:
                 if os.path.exists(p):
                     os.remove(p)
+
+    def test_estimate_compound_properties_tool(self):
+        resp_str = estimate_compound_properties("CN(C)C(=N)NC(=N)N")
+        resp = json.loads(resp_str)
+        self.assertEqual(resp["status"], "success")
+        self.assertEqual(resp["data"]["compound_type"], "monoprotic_base")
+        self.assertEqual(resp["data"]["pka1"], 12.4)
+
+        err_str = estimate_compound_properties("INVALID_SMILES")
+        err = json.loads(err_str)
+        self.assertEqual(err["status"], "error")
+        self.assertIn("remediation", err)
+
+    def test_run_smiles_pbpk_simulation_tool(self):
+        resp_str = run_smiles_pbpk_simulation("CN(C)C(=N)NC(=N)N", dose_mg=500.0, dose_route="oral", simulation_time_h=12.0)
+        resp = json.loads(resp_str)
+        self.assertEqual(resp["status"], "success")
+        self.assertEqual(resp["type"], "individual")
+        self.assertIn("summary", resp)
+
+    def test_compare_renal_impairment_with_smiles_tool(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            res_str = compare_renal_impairment(
+                smiles="CN(C)C(=N)NC(=N)N",
+                dose_mg=500.0,
+                simulation_time_h=12.0,
+                output_dir=tmpdir
+            )
+            res = json.loads(res_str)
+            self.assertEqual(res["status"], "success")
+            self.assertEqual(len(res["table"]), 4)
+            self.assertTrue(os.path.exists(res["plots"]["figure1_multicurve"]))
+            self.assertTrue(os.path.exists(res["plots"]["figure2_auc_barchart"]))
+            self.assertTrue(os.path.exists(res["plots"]["figure3_renal_vs_exposure"]))
+
+    def test_convert_clearance_units_tool(self):
+        r1 = json.loads(convert_clearance_units(6.0, "L/h", "mL/min"))
+        self.assertEqual(r1["status"], "success")
+        self.assertEqual(r1["converted_value"], 100.0)
+
+        r2 = json.loads(convert_clearance_units(100.0, "mL/min", "L/h"))
+        self.assertEqual(r2["status"], "success")
+        self.assertEqual(r2["converted_value"], 6.0)
+
+        r3 = json.loads(convert_clearance_units(100.0, "invalid", "L/h"))
+        self.assertEqual(r3["status"], "error")
 
 if __name__ == "__main__":
     unittest.main()
