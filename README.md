@@ -512,6 +512,22 @@ The model predictions align with FDA recommendations for metformin:
 - eGFR <30 mL/min (severe impairment): Contraindicated (model shows >4× AUC increase with significant accumulation risk)
 ```
 
+#### Metformin pk comparison
+<img width="672" height="432" alt="metformin_pk_comparison" src="https://github.com/user-attachments/assets/67aa6a77-e34a-4150-9d30-dba60dfdd6ab" />
+
+#### Metformin healthy
+<img width="624" height="384" alt="metformin_healthy" src="https://github.com/user-attachments/assets/1bc857de-566b-4389-bd34-4adf27ae88b8" />
+
+#### Metformin mild impairment
+<img width="624" height="384" alt="metformin_mild_impairment" src="https://github.com/user-attachments/assets/ce3e588c-5cfb-4efe-80cd-e195ed6dab37" />
+
+#### Metformin moderate impairment
+<img width="624" height="384" alt="metformin_moderate_impairment" src="https://github.com/user-attachments/assets/a3e9e4ff-e597-428b-bddd-63b5aeb8b2b6" />
+
+#### Metformin severe impairment
+<img width="624" height="384" alt="metformin_severe_impairment" src="https://github.com/user-attachments/assets/830593ee-8bfe-4bcd-a8ec-1c6049c291a4" />
+
+
 ## Mathematical Formulations
 
 ### 1. Rodgers & Rowland Tissue Partition Coefficients ($K_p$)
